@@ -39,7 +39,7 @@ fn title_shift(initial_delay: f32, target_color: Color, font_size: f32) -> impl 
                 Keyframe(Vec3::new(0.0, 100.0, 0.0)),
                 Keyframe(target_color),
                 AnimationDuration::secs(1.3),
-                AnimationCurve(EaseFunction::QuinticInOut),
+                AnimationCurve(EaseFunction::QuarticInOut),
             ),
             AnimationCallback::new(move |mut commands: Commands| {
                 commands.spawn((Transform::from_xyz(0.0, 100.0, -1.0), shadow(font_size)));

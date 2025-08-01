@@ -40,7 +40,11 @@ impl AnimationLerp for Color {
 mod firewheel {
     use super::AnimationLerp;
     use bevy_math::FloatExt;
-    use firewheel::{Volume, clock::ClockSeconds, diff::Notify};
+    use firewheel::{
+        Volume,
+        clock::{InstantMusical, InstantSeconds},
+        diff::Notify,
+    };
 
     fn clamp(db: f32) -> f32 {
         if db < -96.0 { -96.0 } else { db }
@@ -63,7 +67,13 @@ mod firewheel {
         }
     }
 
-    impl AnimationLerp for ClockSeconds {
+    impl AnimationLerp for InstantSeconds {
+        fn animation_lerp(&self, other: &Self, amount: f32) -> Self {
+            Self(self.0.lerp(other.0, amount as f64))
+        }
+    }
+
+    impl AnimationLerp for InstantMusical {
         fn animation_lerp(&self, other: &Self, amount: f32) -> Self {
             Self(self.0.lerp(other.0, amount as f64))
         }

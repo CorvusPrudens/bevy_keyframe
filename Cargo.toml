@@ -15,7 +15,7 @@ bevy_platform = "0.16"
 bevy_time = "0.16"
 
 # optional
-firewheel = { version = "0.4", default-features = false, optional = true }
+firewheel = { version = "0.6.1-beta", default-features = false, optional = true }
 
 [dev-dependencies]
 bevy = { version = "0.16", default-features = false, features = [

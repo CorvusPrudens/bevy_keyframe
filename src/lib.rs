@@ -104,23 +104,13 @@ pub struct SampleRunner;
 #[derive(Component, Default, PartialEq, Eq)]
 pub struct AnimationEvent<T>(pub T);
 
-#[derive(Component)]
-struct FetchAttempts<T> {
-    count: usize,
-    marker: PhantomData<fn() -> T>,
-}
-
-impl<T> Default for FetchAttempts<T> {
-    fn default() -> Self {
-        Self {
-            count: 0,
-            marker: PhantomData,
-        }
-    }
-}
+// TODO: implement shift
+#[derive(Component, Default, Debug)]
+#[require(AnimationDuration)]
+pub struct Shift<T: AnimationLerp + Clone + Send + Sync + 'static>(pub T);
 
 #[derive(Component, Default, Debug)]
-#[require(AnimationDuration, FetchAttempts<T>)]
+#[require(AnimationDuration)]
 #[component(on_add = Self::on_add_hook)]
 pub struct Keyframe<T: AnimationLerp + Clone + Send + Sync + 'static>(pub T);
 
