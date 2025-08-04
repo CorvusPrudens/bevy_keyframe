@@ -1,24 +1,114 @@
-use super::{
-    AnimatedValue, AnimationOf, Animations, FetchStartValue, Keyframe, StartValue,
-    dynamic_systems::DynamicObservers, lerp::AnimationLerp,
+use super::{Animations, dynamic_systems::DynamicObservers, lerp::AnimationLerp};
+use crate::{
+    AnimationCurve, AnimationDirection, AnimationDuration, AnimationSystems, AnimationTarget,
+    Delta, Interval, Keyframe, dynamic_systems::DynamicSystems, playhead::PlayheadMove,
 };
+use bevy_app::PreUpdate;
 use bevy_ecs::{
     component::{HookContext, Mutable},
     prelude::*,
-    world::DeferredWorld,
+    world::{DeferredWorld, EntityMutExcept},
 };
-use std::{marker::PhantomData, sync::Arc};
+use std::{
+    marker::PhantomData,
+    sync::{Arc, OnceLock},
+};
 
-pub trait FieldLens<T>: Send + Sync + 'static {
-    fn get_field(&self, entity: &mut EntityMut) -> Result<T>;
-    fn set_field(&self, entity: &mut EntityMut, value: T) -> Result;
+// This is kinda stupid, so we'll want to find a better solution.
+pub type FieldGetter<'w, T> = EntityMutExcept<
+    'w,
+    (
+        DynamicFieldLens<T>,
+        Delta<T>,
+        Keyframe<T>,
+        AnimationDuration,
+        AnimationLens<T>,
+        AnimationTarget,
+        PlayheadMove,
+        Interval<T>,
+        AnimationCurve,
+    ),
+>;
+
+pub trait FieldLens<T: AnimationLerp>: Send + Sync + 'static {
+    fn get_field(&self, entity: FieldGetter<T>) -> Result<T>;
+    fn set_field(&self, entity: FieldGetter<T>, value: T) -> Result;
 }
 
 #[derive(Component)]
+pub struct AnimationLens<T: AnimationLerp> {
+    lens: Entity,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T: AnimationLerp> AnimationLens<T> {
+    pub fn new(lens: Entity) -> Self {
+        Self {
+            lens,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn get(&self) -> Entity {
+        self.lens
+    }
+}
+
+fn propagate_lens_ref<T: AnimationLerp>(
+    lenses: Query<Entity, Added<DynamicFieldLens<T>>>,
+    hierarchy: Query<&Animations>,
+    conflicts: Query<Has<DynamicFieldLens<T>>>,
+    mut commands: Commands,
+) -> Result {
+    for new_lens_entity in &lenses {
+        commands
+            .entity(new_lens_entity)
+            .insert(AnimationLens::<T>::new(new_lens_entity));
+
+        fn recurse<T: AnimationLerp>(
+            new_lens: Entity,
+            node: Entity,
+            hierarchy: &Query<&Animations>,
+            conflicts: &Query<Has<DynamicFieldLens<T>>>,
+            mut commands: Commands,
+        ) -> Result {
+            for child in hierarchy.get(node).ok().iter().flat_map(|a| a.iter()) {
+                if !conflicts.get(child)? {
+                    commands
+                        .entity(child)
+                        .insert(AnimationLens::<T>::new(new_lens));
+                    recurse(new_lens, child, hierarchy, conflicts, commands.reborrow())?;
+                }
+            }
+
+            Ok(())
+        }
+
+        recurse(
+            new_lens_entity,
+            new_lens_entity,
+            &hierarchy,
+            &conflicts,
+            commands.reborrow(),
+        )?;
+    }
+
+    Ok(())
+}
+
+#[derive(Component, Clone)]
 #[component(on_add = Self::on_add_hook)]
-pub struct DynamicFieldLens<T: AnimationLerp + Clone + Send + Sync + 'static>(
-    Arc<dyn FieldLens<T>>,
-);
+pub struct DynamicFieldLens<T: AnimationLerp>(Arc<dyn FieldLens<T>>);
+
+impl<T: AnimationLerp> FieldLens<T> for DynamicFieldLens<T> {
+    fn get_field(&self, entity: FieldGetter<T>) -> Result<T> {
+        self.0.get_field(entity)
+    }
+
+    fn set_field(&self, entity: FieldGetter<T>, value: T) -> Result {
+        self.0.set_field(entity, value)
+    }
+}
 
 impl<T> core::fmt::Debug for DynamicFieldLens<T>
 where
@@ -42,107 +132,10 @@ where
     }
 
     fn on_add_hook(mut world: DeferredWorld, _context: HookContext) {
-        // world.commands().add_systems_dynamic(PreUpdate, || {
-        //     Self::animate.after(Keyframe::<T>::fetch_start_value)
-        // });
-
         let mut commands = world.commands();
-        commands.add_observer_dynamic(Self::observe_animation);
-        commands.add_observer_dynamic(Self::observe_start_value);
-    }
-
-    fn observe_start_value(
-        mut trigger: Trigger<FetchStartValue<T>>,
-        lens: Query<&Self>,
-        source: Query<(Has<StartValue<T>>, Option<&AnimationOf>)>,
-        ancestors: Query<&AnimationOf>,
-        parents: Query<&Animations>,
-        siblings: Query<&Keyframe<T>>,
-        mut commands: Commands,
-    ) -> Result {
-        let (has_start_value, animation_of) = source.get(trigger.source)?;
-
-        if has_start_value {
-            return Ok(());
-        }
-
-        let Ok(lens) = lens.get(trigger.target()).map(|l| l.0.clone()) else {
-            return Ok(());
-        };
-
-        trigger.propagate(false);
-
-        // TODO: no parent -- could this be a root node?
-        let Some(_parent) = animation_of else {
-            commands.entity(trigger.source).log_components();
-
-            // in this case, try to get the initial value from the animation target(?)
-            return Err("not yet implemented".into());
-        };
-
-        // iterate through all the leaves to find the previous value
-        // TODO: obviously this could be massively improved
-        let root = ancestors.root_ancestor(trigger.source);
-        let mut previous_keyframe = None;
-        for leaf in parents.iter_leaves(root) {
-            if leaf == trigger.source {
-                break;
-            }
-
-            if let Ok(keyframe) = siblings.get(leaf) {
-                previous_keyframe = Some(keyframe);
-            }
-        }
-
-        match previous_keyframe {
-            Some(keyframe) => {
-                commands
-                    .entity(trigger.source)
-                    .insert(StartValue(keyframe.0.clone()));
-            }
-            None => {
-                let animation_target = ancestors.root_ancestor(trigger.target());
-                let animation_node = trigger.source;
-                commands.queue(move |world: &mut World| -> Result {
-                    let entity = world.entity_mut(animation_target);
-                    let value = lens.get_field(&mut entity.into())?;
-
-                    let start_value = StartValue(value.clone());
-
-                    world.commands().entity(animation_node).insert(start_value);
-
-                    Ok(())
-                });
-            }
-        }
-
-        Ok(())
-    }
-
-    fn observe_animation(
-        mut trigger: Trigger<AnimatedValue<T>>,
-        lens: Query<&Self>,
-        animation_target: Query<&AnimationOf>,
-        mut commands: Commands,
-    ) -> Result {
-        let Ok(lens) = lens.get(trigger.target()).map(|l| l.0.clone()) else {
-            return Ok(());
-        };
-        let root = animation_target.root_ancestor(trigger.target());
-        let value = trigger.0.clone();
-
-        commands.queue(move |world: &mut World| -> Result {
-            // TODO: we could accumulate values here for blending instead
-            // of immediately applying them.
-            let entity = world.get_entity_mut(root)?;
-            lens.set_field(&mut entity.into(), value)?;
-
-            Ok(())
+        commands.add_systems_dynamic(PreUpdate, || {
+            propagate_lens_ref::<T>.before(AnimationSystems::Driver)
         });
-
-        trigger.propagate(false);
-
-        Ok(())
     }
 }
 
@@ -163,7 +156,7 @@ where
     C: Component<Mutability = Mutable>,
     P: Clone + Send + Sync + AnimationLerp + 'static,
 {
-    fn get_field(&self, entity: &mut EntityMut) -> Result<P> {
+    fn get_field(&self, mut entity: FieldGetter<P>) -> Result<P> {
         let value = entity
             .get_mut::<C>()
             .map(|mut c| (self.func)(&mut c).clone())
@@ -177,7 +170,7 @@ where
         Ok(value)
     }
 
-    fn set_field(&self, entity: &mut EntityMut, value: P) -> Result {
+    fn set_field(&self, mut entity: FieldGetter<P>, value: P) -> Result {
         let mut component = entity.get_mut::<C>().ok_or_else(|| {
             format!(
                 "expected component {} on animation target",

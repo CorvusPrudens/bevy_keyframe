@@ -11,7 +11,15 @@ pub enum PlaybackState {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum PlaybackMode {
     Once,
-    Repeat,
+    Repeat(RepeatMode),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum RepeatMode {
+    /// Restart the animation.
+    Restart,
+    /// Reverse the animation direction at each end.
+    PingPong,
 }
 
 #[derive(Component, Debug, PartialEq)]
@@ -65,10 +73,13 @@ impl TimeDriver {
             PlaybackMode::Once => {
                 driver.pause();
             }
-            PlaybackMode::Repeat => {
+            PlaybackMode::Repeat(RepeatMode::Restart) => {
                 // TODO: this doesn't wrap properly since it'll chop off
                 // whatever fractional end bit there was
                 playhead.jump_to(0.0);
+            }
+            PlaybackMode::Repeat(RepeatMode::PingPong) => {
+                driver.speed = -driver.speed;
             }
         }
     }

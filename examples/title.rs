@@ -73,7 +73,7 @@ fn shadow(font_size: f32) -> impl Bundle {
             Transform::from_xyz(0.0, 0.0, z),
             lens!(Transform::translation),
             TimeDriver {
-                mode: drivers::PlaybackMode::Repeat,
+                mode: drivers::PlaybackMode::Repeat(drivers::RepeatMode::Restart),
                 ..Default::default()
             },
             animations![

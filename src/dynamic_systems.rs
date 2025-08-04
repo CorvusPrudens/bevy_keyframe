@@ -23,7 +23,7 @@ impl DynamicSystems for Commands<'_, '_> {
         S: IntoScheduleConfigs<Box<dyn System<In = (), Out = Result<(), BevyError>>>, M> + 'static,
     {
         self.queue(|world: &mut World| {
-            let id = TypeId::of::<S>();
+            let id = TypeId::of::<F>();
             if let Entry::Vacant(e) = world.resource_mut::<DynamicSystemRegistry>().0.entry(id) {
                 let inserter = DeferredSystemInsertion(Box::new(move |world: &mut World| {
                     // let schedules = world.resource::<Schedules>();
