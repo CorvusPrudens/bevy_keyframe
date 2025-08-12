@@ -61,6 +61,8 @@ fn trace_square(scale: f32, duration: f32) -> impl Bundle {
     );
 
     (
+        // Because these lenses don't conflict, we can stuff both
+        // of them in the same sequence.
         lens!(Transform::translation),
         lens!(Transform::rotation),
         TimeDriver {
@@ -80,6 +82,7 @@ fn trace_square(scale: f32, duration: f32) -> impl Bundle {
                 Delta(Vec3::NEG_Y * scale),
                 Delta(Quat::from_rotation_z(-FRAC_PI_2)),
             ),
+            AnimationCallback::new(|| info!("Animation complete!")),
         ],
     )
 }
