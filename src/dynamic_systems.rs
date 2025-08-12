@@ -2,7 +2,6 @@ use bevy_ecs::{prelude::*, schedule::ScheduleLabel, system::IntoObserverSystem};
 use bevy_platform::collections::{HashMap, HashSet, hash_map::Entry};
 use std::any::TypeId;
 
-#[expect(unused)]
 pub trait DynamicSystems {
     fn add_systems_dynamic<F, S, M>(&mut self, schedule: impl ScheduleLabel, systems: F)
     where
@@ -26,11 +25,6 @@ impl DynamicSystems for Commands<'_, '_> {
             let id = TypeId::of::<F>();
             if let Entry::Vacant(e) = world.resource_mut::<DynamicSystemRegistry>().0.entry(id) {
                 let inserter = DeferredSystemInsertion(Box::new(move |world: &mut World| {
-                    // let schedules = world.resource::<Schedules>();
-                    // for (label, sched) in schedules.iter() {
-                    //     info!("sched: {label:#?}");
-                    // }
-
                     world.schedule_scope(schedule, |_: &mut World, schedule: &mut Schedule| {
                         schedule.add_systems(systems());
                     })
@@ -51,6 +45,7 @@ pub(super) fn handle_insertions(
     }
 }
 
+#[expect(unused)]
 pub trait DynamicObservers {
     fn add_observer_dynamic<O, E, B, M>(&mut self, systems: O)
     where

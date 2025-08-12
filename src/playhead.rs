@@ -62,6 +62,10 @@ impl AnimationPlayhead {
         previous_position
     }
 
+    // Notice how we apply the movement in _stages_, potentially running the actual
+    // animation schedule more than once per frame. This preserves the order of
+    // segments while avoiding severe performance penalties from mechanisms like
+    // observer events.
     pub(super) fn apply_movement(world: &mut World) -> Result {
         let stages = world
             .resource::<PlayheadSteps>()
@@ -71,8 +75,6 @@ impl AnimationPlayhead {
             .copied()
             .map(|s| s + 1)
             .unwrap_or(0);
-
-        // bevy_log::info!("total stages: {stages}");
 
         for stage in 0..stages {
             let Some(items) = world.resource_mut::<PlayheadSteps>().0.remove(&stage) else {
@@ -91,7 +93,6 @@ impl AnimationPlayhead {
                 movement,
             } in items
             {
-                bevy_log::info!("movement: {movement:?}");
                 world.get_entity_mut(entity)?.insert(movement);
 
                 if start || end {
@@ -114,6 +115,11 @@ impl AnimationPlayhead {
         Ok(())
     }
 
+    // This is pretty inefficient, but could be easily improved with some caching.
+    //
+    // We essentially sweep over the entire `Animations` hierarchy, building up the timeline
+    // as we go. If we've swept over any leaves, we keep track of them for the `apply_movement`
+    // system. This results in okayish performane over thousands of hierarchies.
     pub(super) fn handle_movement(
         mut playheads: Query<(Entity, &mut Self), Changed<Self>>,
         animation_leaves: Query<&Animations>,

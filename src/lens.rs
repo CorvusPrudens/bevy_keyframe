@@ -1,7 +1,7 @@
-use super::{Animations, dynamic_systems::DynamicObservers, lerp::AnimationLerp};
+use super::{Animations, lerp::AnimationLerp};
 use crate::{
-    AnimationCurve, AnimationDirection, AnimationDuration, AnimationSystems, AnimationTarget,
-    Delta, Interval, Keyframe, dynamic_systems::DynamicSystems, playhead::PlayheadMove,
+    AnimationCurve, AnimationDuration, AnimationSystems, AnimationTarget, Delta, Interval,
+    Keyframe, dynamic_systems::DynamicSystems, playhead::PlayheadMove,
 };
 use bevy_app::PreUpdate;
 use bevy_ecs::{
@@ -9,10 +9,7 @@ use bevy_ecs::{
     prelude::*,
     world::{DeferredWorld, EntityMutExcept},
 };
-use std::{
-    marker::PhantomData,
-    sync::{Arc, OnceLock},
-};
+use std::{marker::PhantomData, sync::Arc};
 
 // This is kinda stupid, so we'll want to find a better solution.
 pub type FieldGetter<'w, T> = EntityMutExcept<

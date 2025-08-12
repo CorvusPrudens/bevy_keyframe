@@ -2,17 +2,14 @@
 
 use bevy_app::prelude::*;
 use bevy_ecs::{
-    component::HookContext,
-    prelude::*,
-    schedule::ScheduleLabel,
-    system::SystemId,
-    world::{DeferredWorld, EntityMutExcept, EntityRefExcept},
+    component::HookContext, prelude::*, schedule::ScheduleLabel, system::SystemId,
+    world::DeferredWorld,
 };
 use bevy_math::{Curve, curve::EaseFunction};
-use dynamic_systems::{DynamicObservers, DynamicSystems};
+use dynamic_systems::DynamicSystems;
 use lens::{AnimationLens, FieldGetter};
 use playhead::PlayheadMove;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 pub mod drivers;
 mod dynamic_systems;
@@ -65,8 +62,8 @@ impl Plugin for KeyframePlugin {
                 dynamic_systems::handle_insertions
                     .run_if(resource_changed::<dynamic_systems::DynamicSystemRegistry>),
             )
-            .add_observer(drivers::TimeDriver::observe_sequence)
-            .add_observer(AnimationCallback::observe_movement);
+            .add_systems(Animate, AnimationCallback::handle_movement)
+            .add_observer(drivers::TimeDriver::observe_sequence);
     }
 }
 
@@ -137,91 +134,10 @@ impl Default for AnimationCurve {
 
 #[derive(Debug, Component, Clone)]
 // #[component(on_insert = Self::on_add_hook)]
-struct Interval<T: AnimationLerp> {
+pub struct Interval<T: AnimationLerp> {
     pub start: T,
     pub end: T,
 }
-
-impl<T: AnimationLerp> Interval<T> {
-    // fn on_add_hook(mut world: DeferredWorld, context: HookContext) {
-    //     let mut commands = world.commands();
-    //     commands.add_observer_dynamic(Self::observe_movement);
-    //
-    //     commands.queue(move |world: &mut World| {
-    //         world.run_system_once(
-    //             move |q: Query<(Entity, &Self, &AnimationDuration, Option<&AnimationCurve>)>,
-    //                   mut commands: Commands|
-    //                   -> Result {
-    //                 let (entity, interval, duration, curve) = q.get(context.entity)?;
-    //
-    //                 let duration = duration.0.as_secs_f32();
-    //                 let t = if duration == 0.0 {
-    //                     1.0
-    //                 } else {
-    //                     interval.movement.end / duration
-    //                 };
-    //
-    //                 let t = match curve {
-    //                     Some(curve) => curve.0.sample(t).unwrap_or(t),
-    //                     None => t,
-    //                 };
-    //
-    //                 let new_value = interval.start.animation_lerp(&interval.end, t);
-    //
-    //                 commands.entity(entity).trigger(AnimatedValue(new_value));
-    //
-    //                 Ok(())
-    //             },
-    //         )
-    //     })
-    // }
-
-    // fn observe_movement(
-    //     trigger: Trigger<playhead::PlayheadMove>,
-    //     q: Query<(Entity, &Self, &AnimationDuration, Option<&AnimationCurve>)>,
-    //     mut commands: Commands,
-    // ) -> Result {
-    //     let Ok((entity, interval, duration, curve)) = q.get(trigger.target()) else {
-    //         return Ok(());
-    //     };
-    //
-    //     let duration = duration.0.as_secs_f32();
-    //     let t = if duration == 0.0 {
-    //         1.0
-    //     } else {
-    //         trigger.end / duration
-    //     };
-    //
-    //     let t = match curve {
-    //         Some(curve) => curve.0.sample(t).unwrap_or(t),
-    //         None => t,
-    //     };
-    //
-    //     let new_value = interval.start.animation_lerp(&interval.end, t);
-    //
-    //     commands.entity(entity).trigger(AnimatedValue(new_value));
-    //
-    //     Ok(())
-    // }
-}
-
-#[derive(Event)]
-#[event(auto_propagate, traversal = &'static AnimationOf)]
-pub struct FetchInterval<T: AnimationLerp> {
-    source: Entity,
-    direction: AnimationDirection,
-    transformation: Arc<dyn Fn(&T) -> Interval<T> + Send + Sync>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnimationDirection {
-    Forwards,
-    Backwards,
-}
-
-// #[derive(Event)]
-// #[event(auto_propagate, traversal = &'static AnimationOf)]
-// pub struct AnimatedValue<T>(pub T);
 
 #[derive(Component, Debug)]
 pub struct AnimationTarget(pub Entity);
@@ -283,6 +199,21 @@ fn propagate_animation_target(
 #[component(on_add = Self::on_add_hook)]
 pub struct Keyframe<T: AnimationLerp>(pub T);
 
+fn get_time(duration: Duration, instant: f32, curve: Option<&AnimationCurve>) -> f32 {
+    let duration = duration.as_secs_f32();
+    let t = if duration == 0.0 {
+        1.0
+    } else {
+        instant / duration
+    };
+
+    match curve {
+        Some(curve) => curve.0.sample(t).unwrap_or(t),
+        None => t,
+    }
+}
+
+// TODO: manage fetching
 impl<T: AnimationLerp> Keyframe<T> {
     fn on_add_hook(mut world: DeferredWorld, _context: HookContext) {
         // world
@@ -386,34 +317,34 @@ impl<T: AnimationLerp> Keyframe<T> {
 #[derive(Component, Default, Debug)]
 #[require(AnimationDuration)]
 #[component(on_add = Self::on_add_hook)]
-pub struct Delta<T: AnimationLerp + Clone + Send + Sync + 'static>(pub T);
+pub struct Delta<T: AnimationLerp>(pub T);
 
-impl<T: AnimationLerp + Clone + Send + Sync + 'static> Delta<T> {
+impl<T: AnimationLerp> Delta<T> {
     fn on_add_hook(mut world: DeferredWorld, _context: HookContext) {
+        // dynamically register the necessary systems for convenience
         world
             .commands()
             .add_systems_dynamic(Animate, || Self::handle_movement);
     }
 
+    // This is quite beautiful because it can be stateless. No fetching required.
     fn handle_movement(
         delta: Query<
             (
-                Entity,
                 &Self,
                 &AnimationDuration,
                 &AnimationLens<T>,
                 &AnimationTarget,
                 &PlayheadMove,
-                Option<&Interval<T>>,
                 Option<&AnimationCurve>,
             ),
+            // This is the key bit. Any time this changes, we can evaluate an animation.
             Changed<PlayheadMove>,
         >,
         lens: Query<&DynamicFieldLens<T>>,
         mut target: Query<FieldGetter<T>>,
-        mut commands: Commands,
     ) -> Result {
-        for (entity, delta, duration, lens_ref, target_ref, movement, interval, curve) in &delta {
+        for (delta, duration, lens_ref, target_ref, movement, curve) in &delta {
             let lens = lens.get(lens_ref.get())?;
             let mut target = target.get_mut(target_ref.0)?;
 
@@ -422,75 +353,19 @@ impl<T: AnimationLerp + Clone + Send + Sync + 'static> Delta<T> {
                 continue;
             }
 
-            let forwards = movement.start < movement.end;
+            let default_value = T::default();
 
-            if forwards {
-                // if we're moving forward and start at zero,
-                // add the interval!
-                let just_started = movement.start == 0.0;
+            let start_time = get_time(duration.0, movement.start, curve);
+            let start = default_value.animation_lerp(&delta.0, start_time);
 
-                let interval = match (just_started, interval) {
-                    (true, _) | (false, None) => {
-                        let start = lens.get_field(target.reborrow())?;
-                        let interval = Interval {
-                            end: start.forwards_delta(&delta.0),
-                            start,
-                        };
+            let end_time = get_time(duration.0, movement.end, curve);
+            let end = default_value.animation_lerp(&delta.0, end_time);
 
-                        commands.entity(entity).insert(interval.clone());
+            let difference = end.difference(&start);
 
-                        interval
-                    }
-                    (_, Some(interval)) => interval.clone(),
-                };
-
-                let duration = duration.0.as_secs_f32();
-                let t = if duration == 0.0 {
-                    1.0
-                } else {
-                    movement.end / duration
-                };
-
-                let t = match curve {
-                    Some(curve) => curve.0.sample(t).unwrap_or(t),
-                    None => t,
-                };
-
-                let new_value = interval.start.animation_lerp(&interval.end, t);
-                lens.set_field(target, new_value)?;
-            } else {
-                let duration = duration.0.as_secs_f32();
-                let just_started = movement.start >= duration;
-
-                let interval = match (just_started, interval) {
-                    (true, _) | (false, None) => {
-                        let start = lens.get_field(target.reborrow())?;
-                        let interval = Interval {
-                            start: start.backwards_delta(&delta.0),
-                            end: start,
-                        };
-
-                        commands.entity(entity).insert(interval.clone());
-
-                        interval
-                    }
-                    (_, Some(interval)) => interval.clone(),
-                };
-
-                let t = if duration == 0.0 {
-                    1.0
-                } else {
-                    movement.end / duration
-                };
-
-                let t = match curve {
-                    Some(curve) => curve.0.sample(t).unwrap_or(t),
-                    None => t,
-                };
-
-                let new_value = interval.start.animation_lerp(&interval.end, t);
-                lens.set_field(target, new_value)?;
-            }
+            let mut value = lens.get_field(target.reborrow())?;
+            value.accumulate(&difference);
+            lens.set_field(target, value)?;
         }
 
         Ok(())
@@ -517,7 +392,8 @@ impl AnimationCallback {
     }
 
     fn on_insert_hook(mut world: DeferredWorld, context: HookContext) {
-        world.commands().queue(move |world: &mut World| {
+        let mut commands = world.commands();
+        commands.queue(move |world: &mut World| {
             let Some(system) = world
                 .get_mut::<Self>(context.entity)
                 .and_then(|mut cb| cb.unregistered_system.take())
@@ -530,135 +406,16 @@ impl AnimationCallback {
         });
     }
 
-    fn observe_movement(
-        trigger: Trigger<playhead::PlayheadMove>,
-        q: Query<(&Self, &AnimationDuration)>,
+    fn handle_movement(
+        q: Query<(&Self, &AnimationDuration, &PlayheadMove), Changed<PlayheadMove>>,
         mut commands: Commands,
     ) {
-        let Ok((callback, duration)) = q.get(trigger.target()) else {
-            return;
-        };
-
-        if trigger.end >= duration.0.as_secs_f32() {
-            if let Some(id) = callback.system_id {
-                commands.run_system(id);
+        for (callback, duration, movement) in &q {
+            if movement.end >= duration.0.as_secs_f32() {
+                if let Some(id) = callback.system_id {
+                    commands.run_system(id);
+                }
             }
         }
     }
 }
-
-// #[cfg(test)]
-// mod test {
-//     use bevy::log::LogPlugin;
-//
-//     use super::*;
-//     use crate::test::run;
-//
-//     fn prepare_app<F: IntoSystem<(), (), M>, M>(startup: F) -> App {
-//         let mut app = App::new();
-//
-//         app.add_plugins((
-//             MinimalPlugins,
-//             AssetPlugin::default(),
-//             crate::SeedlingPlugin::<crate::profiling::ProfilingBackend> {
-//                 graph_config: crate::startup::GraphConfiguration::Empty,
-//                 ..crate::SeedlingPlugin::<crate::profiling::ProfilingBackend>::new()
-//             },
-//             AnimationPlugin,
-//             LogPlugin::default(),
-//         ))
-//         .add_systems(Startup, startup);
-//
-//         app.finish();
-//         app.cleanup();
-//         app.update();
-//
-//         app
-//     }
-//
-//     fn simple(mut commands: Commands) {
-//         commands.spawn((
-//             VolumeNode {
-//                 volume: Volume::SILENT,
-//             },
-//             drivers::TimeDriver::default(),
-//             lens!(VolumeNode::volume),
-//             animations![
-//                 Keyframe(Volume::Decibels(-24.0)),
-//                 (
-//                     Keyframe(Volume::Decibels(0.0)),
-//                     AnimationCurve(EaseFunction::QuadraticInOut),
-//                     AnimationDuration::secs(0.5),
-//                 )
-//             ],
-//         ));
-//     }
-//
-//     fn fade_in(seconds: f32) -> impl Bundle {
-//         (
-//             lens!(VolumeNode::volume),
-//             animations![(
-//                 Keyframe(Volume::Linear(1.0)),
-//                 AnimationDuration::secs(seconds),
-//             )],
-//         )
-//     }
-//
-//     fn fade_out(seconds: f32) -> impl Bundle {
-//         (
-//             lens!(VolumeNode::volume),
-//             animations![(
-//                 Keyframe(Volume::Linear(0.0)),
-//                 AnimationDuration::secs(seconds),
-//             )],
-//         )
-//     }
-//
-//     #[test]
-//     fn test_playhead() {
-//         let mut app = prepare_app(|mut commands: Commands| {
-//             // simple(commands);
-//
-//             commands.spawn((
-//                 VolumeNode {
-//                     volume: Volume::SILENT,
-//                 },
-//                 drivers::TimeDriver::default(),
-//                 animations![
-//                     fade_in(1.5),
-//                     AnimationDuration(Duration::from_secs(1)),
-//                     fade_out(1.5),
-//                 ],
-//             ));
-//         });
-//
-//         for _ in 0..16 {
-//             run(
-//                 &mut app,
-//                 |q: Query<(
-//                     Entity,
-//                     &Keyframe<Volume>,
-//                     &AnimationDuration,
-//                     Option<&StartValue<Volume>>,
-//                 )>,
-//                  mut commands: Commands| {
-//                     for (entity, node, duration, start) in &q {
-//                         commands.entity(entity).log_components();
-//                         println!("node: {node:?}, duration: {duration:?}, start: {start:?}");
-//                     }
-//                 },
-//             );
-//
-//             run(
-//                 &mut app,
-//                 |q: Query<(Entity, &VolumeNode)>, mut commands: Commands| {
-//                     for (entity, node) in &q {
-//                         // commands.entity(entity).log_components();
-//                         println!("node: {node:?}");
-//                     }
-//                 },
-//             );
-//             app.update();
-//         }
-//     }
-// }
